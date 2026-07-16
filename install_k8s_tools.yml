@@ -1,0 +1,111 @@
+---
+- name: Install Kubernetes Components on Cluster Nodes
+  hosts: k8s_master, k8s_workers
+  become: true
+  tasks:
+
+    - name: Step 1 - Disable Swap immediately and permanently
+      shell: |
+        swapoff -a
+        sed -i '/swap/d' /etc/fstab
+      # Этот шаг не идемпотентен в shell, поэтому скажем Ansible не паниковать при повторном запуске
+      changed_when: false 
+
+    - name: Step 2 - Enable Linux Kernel modules for networking
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Step 3 - Make kernel modules persistent on reboot
+    # Шаг необходим чтобы overlay и br_netfilter не слетели после перезагрузки
+      copy:
+        content: |
+          overlay
+          br_netfilter
+        dest: /etc/modules-load.d/k8s.conf
+
+    - name: Step 4 - Configure sysctl for Kubernetes networking
+      sysctl:
+        name: "{{ item }}"
+        value: "1"
+        sysctl_set: yes
+        state: present
+        reload: yes
+      loop:
+        - net.bridge.bridge-nf-call-iptables
+        - net.bridge.bridge-nf-call-ip6tables
+        - net.ipv4.ip_forward
+
+    - name: Step 5 - Install Containerd runtime
+      apt:
+        name: containerd
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Step 6 - Configure Containerd to use Systemd Cgroup
+    # Тут требуется указание команды замены s/.../g, иначе K8s намертво зависнет
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+      notify: Restart Containerd
+
+    - name: Step 7 - Create directory for Kubernetes APT keyring
+    # Скачиваем ключ напрямую в системную папку keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Step 8 - Download official Kubernetes GPG key
+      get_url:
+        # Указываем официальный репозиторий
+        url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+        dest: /tmp/k8s-release.key
+        mode: '0644'
+        validate_certs: true
+      register: k8s_key
+
+    - name: Step 9 - Convert key # Конвертируем asc ключ в gpg
+      shell: |
+        gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg # Запустится, только если этого файла нет
+
+    - name: Step 10 - Add Kubernetes v1.30 repository
+      # Используем модуль copy вместо apt_repository, чтобы избежать ложных падений кэша
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+        mode: '0644'
+
+    - name: Step 11 - Install Kubernetes core tools
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Step 12 - Hold Kubernetes packages to prevent accidental updates
+    # Фиксируем версии утилит чтобы ноды кластера не разъехались по разным версиям
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+  handlers:
+    - name: Restart Containerd
+      service:
+        name: containerd
+        state: restarted
