@@ -1,0 +1,46 @@
+---
+- name: Deploy Production PostgreSQL Server
+  hosts: cloud_backend
+  become: true
+  tasks:
+
+    - name: Step 1 - Install PostgreSQL and its tools
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2 # Библиотека Ansible для управления базами внутри Postgres
+        state: present
+        update_cache: yes
+
+    - name: Step 2 - Configure Postgres to listen on all network cards
+      lineinfile:
+        path: /etc/postgresql/16/main/postgresql.conf
+        regexp: "#?listen_addresses ="
+        line: "listen_addresses = '*'"
+      notify: Restart Postgres
+
+    - name: Step 3 - Allow remote connection from our network via md5 password
+      lineinfile:
+        path: /etc/postgresql/16/main/pg_hba.conf
+        line: "host    all             all             0.0.0.0/0         md5"
+      notify: Restart Postgres
+
+    - name: Step 4 - Create a secure Database User for Java Backend
+      postgresql_user: 
+        name: java_user
+        password: "SuperSecureJavaPassword123"
+        role_attr_flags: SUPERUSER
+      become_user: postgres
+
+    - name: Step 5 - Create a production Database
+      postgresql_db:
+        name: java_app_db
+        owner: java_user
+      become_user: postgres
+
+  handlers:
+    - name: Restart Postgres
+      service:
+        name: postgresql
+        state: restarted
