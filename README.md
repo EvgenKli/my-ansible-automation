@@ -20,4 +20,4 @@
     ```bash
     ansible-playbook -i hosts deploy_postgres.yml
     ansible-playbook -i hosts install_k8s_tools.yml
-```
+    ```
