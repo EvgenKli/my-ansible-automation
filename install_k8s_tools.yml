@@ -104,18 +104,27 @@
         - kubeadm
         - kubectl
 
-    - name: Step 13 - Install Helm via snap (Only on Master)
-      snap:
-        name: helm
-        classic: true
+    - name: Step 13 - Download and Install Helm via official script (Only on Master)
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+      when: inventory_hostname in groups['k8s_master']
+      # Скрипт поймет, установлен ли Helm, но для Ansible пометим измененным
+
+    - name: Step 14 - Check if Prometheus Helm repository exists
+      shell: helm repo list
+      register: helm_repo_list
+      changed_when: false
       when: inventory_hostname in groups['k8s_master']
 
-    - name: Step 14 - Add Prometheus Helm Repository (Only on Master)
+    - name: Step 15 - Add Prometheus Helm Repository
       shell: |
         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
         helm repo update
-      when: inventory_hostname in groups['k8s_master']
-      changed_when: false
+      when:
+        - inventory_hostname in groups['k8s_master']
+        - "'prometheus-community' not in helm_repo_list.stdout"
 
   handlers:
     - name: Restart Containerd
