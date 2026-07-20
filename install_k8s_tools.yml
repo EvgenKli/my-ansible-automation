@@ -104,6 +104,19 @@
         - kubeadm
         - kubectl
 
+    - name: Step 13 - Install Helm via snap (Only on Master)
+      snap:
+        name: helm
+        classic: true
+      when: inventory_hostname in groups['k8s_master']
+
+    - name: Step 14 - Add Prometheus Helm Repository (Only on Master)
+      shell: |
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+      when: inventory_hostname in groups['k8s_master']
+      changed_when: false
+
   handlers:
     - name: Restart Containerd
       service:
